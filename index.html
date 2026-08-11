@@ -1,0 +1,1311 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+<title>আমার হিসাব</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#26323A" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/lucide-react@0.263.1/dist/umd/lucide-react.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<style>
+  body { margin: 0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+  // ---- Firebase config (from your Firebase console) ----
+  const firebaseConfig = {
+    apiKey: "AIzaSyA_DYxyE5EIITD3XIZ1FpWIYoPBbrGR1N4",
+    authDomain: "amar-hiseb-fcc4e.firebaseapp.com",
+    projectId: "amar-hiseb-fcc4e",
+    storageBucket: "amar-hiseb-fcc4e.firebasestorage.app",
+    messagingSenderId: "263439422134",
+    appId: "1:263439422134:web:2162e237161faf64818c17"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+
+  // ---- window.storage shim backed by Firestore ----
+  window.storage = {
+    get: async (key) => {
+      const snap = await db.collection("kv").doc(key).get();
+      if (!snap.exists) return null;
+      return { key, value: snap.data().value, shared: true };
+    },
+    set: async (key, value) => {
+      await db.collection("kv").doc(key).set({ value });
+      return { key, value, shared: true };
+    },
+    delete: async (key) => {
+      await db.collection("kv").doc(key).delete();
+      return { key, deleted: true, shared: true };
+    },
+    list: async (prefix) => {
+      const snap = await db.collection("kv").get();
+      const keys = snap.docs.map((d) => d.id).filter((k) => !prefix || k.startsWith(prefix));
+      return { keys, prefix, shared: true };
+    }
+  };
+</script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+const {
+  ArrowLeft, Plus, Trash2, Pencil, Lock, Users, Shirt, Banknote,
+  ShieldCheck, X, Check, ChevronLeft, ChevronRight, Eye, Scissors,
+  CalendarDays, MapPin, Phone, Wallet, Hash
+} = LucideReact;
+
+/* ---------- helpers ---------- */
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const fmt = (n) => (Number(n) || 0).toLocaleString("en-IN");
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const BN_MONTHS = ["জানুয়ারি","ফেব্রুয়ারি","মার্চ","এপ্রিল","মে","জুন","জুলাই","আগস্ট","সেপ্টেম্বর","অক্টোবর","নভেম্বর","ডিসেম্বর"];
+const monthLabel = (ym) => {
+  if (!ym) return "";
+  const [y, m] = ym.split("-");
+  return `${BN_MONTHS[parseInt(m, 10) - 1]} ${y}`;
+};
+const shiftMonth = (ym, delta) => {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+};
+const shortDate = (iso) => {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y.slice(2)}`;
+};
+
+/* ---------- theme: tailoring workshop ---------- */
+const INK = "#26323A";
+const THREAD = "#C48A2A";
+const PAPER = "#FAF6EF";
+const CARD_BORDER = "#DED2B8";
+const GREEN = "#2E7D5B";
+const RED = "#BE4B3C";
+const MUTED = "#8B8368";
+
+const numStyle = { fontVariantNumeric: "tabular-nums" };
+const stitchBorder = { border: `1.5px dashed ${CARD_BORDER}` };
+
+function App() {
+  const [ready, setReady] = useState(false);
+  const [workers, setWorkers] = useState([]);
+  const [ownerPin, setOwnerPin] = useState(null);
+
+  const [screen, setScreen] = useState("home");
+  const [role, setRole] = useState(null);
+  const [pinInput, setPinInput] = useState("");
+  const [pinConfirm, setPinConfirm] = useState("");
+  const [pinError, setPinError] = useState("");
+
+  const [activeWorker, setActiveWorker] = useState(null);
+  const [entries, setEntries] = useState([]);
+  const [entriesLoading, setEntriesLoading] = useState(false);
+  const [selectedMonth, setSelectedMonth] = useState(todayStr().slice(0, 7));
+
+  const [showAddWorker, setShowAddWorker] = useState(false);
+  const [showEditWorker, setShowEditWorker] = useState(false);
+  const [showAddEntry, setShowAddEntry] = useState(false);
+  const [addEntryKind, setAddEntryKind] = useState("work");
+  const [confirmDeleteWorker, setConfirmDeleteWorker] = useState(false);
+
+  const [staffPendingWorker, setStaffPendingWorker] = useState(null);
+  const [staffPinInput, setStaffPinInput] = useState("");
+  const [staffPinError, setStaffPinError] = useState("");
+
+  const [toast, setToast] = useState("");
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 1800);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const w = await window.storage.get("workers", true);
+        setWorkers(w ? JSON.parse(w.value) : []);
+      } catch (e) {
+        setWorkers([]);
+      }
+      try {
+        const p = await window.storage.get("owner-pin", true);
+        setOwnerPin(p ? p.value : null);
+      } catch (e) {
+        setOwnerPin(null);
+      }
+      setReady(true);
+    })();
+  }, []);
+
+  async function persistWorkers(next) {
+    setWorkers(next);
+    try {
+      await window.storage.set("workers", JSON.stringify(next), true);
+    } catch (e) {}
+  }
+
+  async function loadEntries(workerId) {
+    setEntriesLoading(true);
+    try {
+      const r = await window.storage.get(`entries-${workerId}`, true);
+      setEntries(r ? JSON.parse(r.value) : []);
+    } catch (e) {
+      setEntries([]);
+    }
+    setEntriesLoading(false);
+  }
+
+  async function persistEntries(workerId, next) {
+    setEntries(next);
+    try {
+      await window.storage.set(`entries-${workerId}`, JSON.stringify(next), true);
+    } catch (e) {}
+  }
+
+  function goHome() {
+    setScreen("home");
+    setRole(null);
+    setActiveWorker(null);
+    setEntries([]);
+    setPinInput("");
+    setPinConfirm("");
+    setPinError("");
+    setStaffPendingWorker(null);
+    setStaffPinInput("");
+    setStaffPinError("");
+    setShowAddWorker(false);
+    setShowEditWorker(false);
+    setShowAddEntry(false);
+    setConfirmDeleteWorker(false);
+  }
+
+  function openWorkerDetail(w, forRole) {
+    setActiveWorker(w);
+    setRole(forRole);
+    setSelectedMonth(todayStr().slice(0, 7));
+    setShowAddEntry(false);
+    setShowEditWorker(false);
+    setConfirmDeleteWorker(false);
+    loadEntries(w.id);
+    setScreen("detail");
+  }
+
+  function handleOwnerClick() {
+    setPinInput("");
+    setPinConfirm("");
+    setPinError("");
+    setScreen(ownerPin ? "ownerAuth" : "ownerSetPin");
+  }
+
+  async function submitSetPin() {
+    if (pinInput.length !== 4) return setPinError("৪ সংখ্যার পিন দিন");
+    if (pinInput !== pinConfirm) return setPinError("পিন মিলছে না, আবার দিন");
+    try {
+      await window.storage.set("owner-pin", pinInput, true);
+    } catch (e) {}
+    setOwnerPin(pinInput);
+    setScreen("owner");
+  }
+
+  function submitOwnerAuth() {
+    if (pinInput === ownerPin) {
+      setScreen("owner");
+      setPinError("");
+    } else {
+      setPinError("পিন সঠিক নয়");
+      setPinInput("");
+    }
+  }
+
+  function handleStaffPick(w) {
+    if (!w.pin) {
+      openWorkerDetail(w, "staff");
+      return;
+    }
+    setStaffPendingWorker(w);
+    setStaffPinInput("");
+    setStaffPinError("");
+    setScreen("staffAuth");
+  }
+
+  function submitStaffAuth() {
+    if (staffPinInput === staffPendingWorker.pin) {
+      openWorkerDetail(staffPendingWorker, "staff");
+    } else {
+      setStaffPinError("পিন সঠিক নয়");
+      setStaffPinInput("");
+    }
+  }
+
+  async function addWorker(data) {
+    const w = { id: uid(), createdAt: todayStr(), ...data };
+    await persistWorkers([...workers, w]);
+    setShowAddWorker(false);
+    setToast("নতুন কর্মী যোগ হয়েছে");
+  }
+
+  async function updateWorker(id, patch) {
+    const next = workers.map((w) => (w.id === id ? { ...w, ...patch } : w));
+    await persistWorkers(next);
+    setActiveWorker(next.find((w) => w.id === id));
+    setShowEditWorker(false);
+    setToast("তথ্য হালনাগাদ হয়েছে");
+  }
+
+  async function deleteWorker(id) {
+    await persistWorkers(workers.filter((w) => w.id !== id));
+    try {
+      await window.storage.delete(`entries-${id}`, true);
+    } catch (e) {}
+    goHome();
+  }
+
+  async function addEntry(entry) {
+    const next = [{ id: uid(), ...entry }, ...entries].sort((a, b) =>
+      b.date.localeCompare(a.date)
+    );
+    await persistEntries(activeWorker.id, next);
+    setShowAddEntry(false);
+    setToast("এন্ট্রি যোগ হয়েছে");
+  }
+
+  async function deleteEntry(entryId) {
+    await persistEntries(activeWorker.id, entries.filter((e) => e.id !== entryId));
+  }
+
+  if (!ready) {
+    return (
+      <div style={{ backgroundColor: PAPER }} className="min-h-screen flex items-center justify-center">
+        <p style={{ color: MUTED }}>লোড হচ্ছে…</p>
+      </div>
+    );
+  }
+
+  const productionWorkers = workers.filter((w) => w.type === "piece");
+  const salaryWorkers = workers.filter((w) => w.type === "salary");
+
+  return (
+    <div style={{ backgroundColor: PAPER, fontFamily: "'Hind Siliguri','Noto Sans Bengali',system-ui,sans-serif" }} className="min-h-screen">
+      <div className="max-w-md mx-auto min-h-screen pb-10 relative">
+        <Header
+          screen={screen}
+          onBack={() => {
+            if (screen === "detail") {
+              if (role === "owner") setScreen("owner");
+              else setScreen("staffList");
+            } else if (screen === "ownerAuth" || screen === "ownerSetPin" || screen === "staffList") {
+              goHome();
+            } else if (screen === "staffAuth") {
+              setScreen("staffList");
+            } else if (screen === "owner") {
+              goHome();
+            }
+          }}
+        />
+
+        {screen === "home" && (
+          <HomeScreen onOwner={handleOwnerClick} onStaff={() => setScreen("staffList")} />
+        )}
+
+        {screen === "ownerSetPin" && (
+          <SetPinScreen
+            pinInput={pinInput} setPinInput={setPinInput}
+            pinConfirm={pinConfirm} setPinConfirm={setPinConfirm}
+            error={pinError} onSubmit={submitSetPin}
+          />
+        )}
+
+        {screen === "ownerAuth" && (
+          <AuthPinScreen
+            title="মালিক পিন দিন" value={pinInput} setValue={setPinInput}
+            error={pinError} onSubmit={submitOwnerAuth}
+          />
+        )}
+
+        {screen === "owner" && (
+          <OwnerDashboard
+            productionWorkers={productionWorkers}
+            salaryWorkers={salaryWorkers}
+            onOpen={(w) => openWorkerDetail(w, "owner")}
+            showAddWorker={showAddWorker}
+            setShowAddWorker={setShowAddWorker}
+            onAddWorker={addWorker}
+          />
+        )}
+
+        {screen === "staffList" && (
+          <StaffListScreen workers={workers} onPick={handleStaffPick} />
+        )}
+
+        {screen === "staffAuth" && staffPendingWorker && (
+          <AuthPinScreen
+            title={`"${staffPendingWorker.name}" এর পিন দিন`}
+            value={staffPinInput} setValue={setStaffPinInput}
+            error={staffPinError} onSubmit={submitStaffAuth}
+          />
+        )}
+
+        {screen === "detail" && activeWorker && activeWorker.type === "piece" && (
+          <ProductionWorkerDetail
+            worker={activeWorker}
+            role={role}
+            entries={entries}
+            loading={entriesLoading}
+            showAddEntry={showAddEntry}
+            setShowAddEntry={setShowAddEntry}
+            addEntryKind={addEntryKind}
+            setAddEntryKind={setAddEntryKind}
+            showEditWorker={showEditWorker}
+            setShowEditWorker={setShowEditWorker}
+            confirmDeleteWorker={confirmDeleteWorker}
+            setConfirmDeleteWorker={setConfirmDeleteWorker}
+            onAddEntry={addEntry}
+            onDeleteEntry={deleteEntry}
+            onUpdateWorker={(patch) => updateWorker(activeWorker.id, patch)}
+            onDeleteWorker={() => deleteWorker(activeWorker.id)}
+          />
+        )}
+
+        {screen === "detail" && activeWorker && activeWorker.type === "salary" && (
+          <SalaryWorkerDetail
+            worker={activeWorker}
+            role={role}
+            entries={entries}
+            loading={entriesLoading}
+            selectedMonth={selectedMonth}
+            setSelectedMonth={setSelectedMonth}
+            showAddEntry={showAddEntry}
+            setShowAddEntry={setShowAddEntry}
+            showEditWorker={showEditWorker}
+            setShowEditWorker={setShowEditWorker}
+            confirmDeleteWorker={confirmDeleteWorker}
+            setConfirmDeleteWorker={setConfirmDeleteWorker}
+            onAddEntry={addEntry}
+            onDeleteEntry={deleteEntry}
+            onUpdateWorker={(patch) => updateWorker(activeWorker.id, patch)}
+            onDeleteWorker={() => deleteWorker(activeWorker.id)}
+          />
+        )}
+
+        {toast && (
+          <div
+            style={{ backgroundColor: INK, color: PAPER }}
+            className="fixed bottom-5 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full text-sm shadow-lg flex items-center gap-2 z-50"
+          >
+            <Check size={14} style={{ color: THREAD }} /> {toast}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================= Header ================= */
+function Header({ screen, onBack }) {
+  const showBack = screen !== "home";
+  return (
+    <div
+      style={{ backgroundColor: INK, borderBottom: `2px dashed ${THREAD}` }}
+      className="sticky top-0 z-10 text-[#FAF6EF] px-4 py-4 flex items-center gap-3"
+    >
+      {showBack ? (
+        <button onClick={onBack} className="p-1 -ml-1 active:opacity-60">
+          <ArrowLeft size={22} />
+        </button>
+      ) : (
+        <div style={{ backgroundColor: THREAD }} className="rounded-full p-2 text-[#26323A]">
+          <Scissors size={16} />
+        </div>
+      )}
+      <div>
+        <p style={{ color: THREAD }} className="text-[10px] tracking-[0.2em] uppercase">
+          ফ্যাক্টরি হিসাবের খাতা
+        </p>
+        <h1 className="text-lg font-bold leading-tight">আমার হিসাব</h1>
+      </div>
+    </div>
+  );
+}
+
+/* ================= Home ================= */
+function HomeScreen({ onOwner, onStaff }) {
+  return (
+    <div className="px-5 pt-8 pb-4">
+      <p style={{ color: MUTED }} className="text-sm mb-6">
+        আপনি কে হিসেবে ঢুকতে চান, বেছে নিন।
+      </p>
+      <button
+        onClick={onOwner}
+        style={{ backgroundColor: INK }}
+        className="w-full flex items-center gap-4 text-[#FAF6EF] rounded-2xl px-5 py-5 mb-4 active:opacity-90 shadow-sm"
+      >
+        <div style={{ backgroundColor: THREAD, color: INK }} className="rounded-full p-3">
+          <ShieldCheck size={22} />
+        </div>
+        <div className="text-left">
+          <p className="font-bold text-base">মালিক</p>
+          <p className="text-xs opacity-70">সব হিসাব দেখুন ও এন্ট্রি করুন</p>
+        </div>
+      </button>
+      <button
+        onClick={onStaff}
+        style={{ ...stitchBorder, backgroundColor: "#fff" }}
+        className="w-full flex items-center gap-4 rounded-2xl px-5 py-5 active:opacity-80"
+      >
+        <div style={{ backgroundColor: "#F1E8D2", color: INK }} className="rounded-full p-3">
+          <Eye size={22} />
+        </div>
+        <div className="text-left">
+          <p style={{ color: INK }} className="font-bold text-base">স্টাফ</p>
+          <p style={{ color: MUTED }} className="text-xs">শুধু নিজের হিসাব দেখুন</p>
+        </div>
+      </button>
+    </div>
+  );
+}
+
+/* ================= Pin screens ================= */
+function PinDots({ value }) {
+  return (
+    <div className="flex gap-3 justify-center my-4">
+      {[0, 1, 2, 3].map((i) => (
+        <div
+          key={i}
+          style={{
+            backgroundColor: value.length > i ? INK : "transparent",
+            borderColor: value.length > i ? INK : "#C9BFA0",
+          }}
+          className="w-4 h-4 rounded-full border-2"
+        />
+      ))}
+    </div>
+  );
+}
+
+function NumPad({ onDigit, onDelete }) {
+  const keys = ["1","2","3","4","5","6","7","8","9","","0","⌫"];
+  return (
+    <div className="grid grid-cols-3 gap-3 max-w-[260px] mx-auto mt-2">
+      {keys.map((k, i) =>
+        k === "" ? (
+          <div key={i} />
+        ) : (
+          <button
+            key={i}
+            onClick={() => (k === "⌫" ? onDelete() : onDigit(k))}
+            style={{ ...stitchBorder }}
+            className="h-14 rounded-xl bg-white text-lg font-semibold active:bg-[#F1E8D2]"
+          >
+            <span style={{ color: INK }}>{k}</span>
+          </button>
+        )
+      )}
+    </div>
+  );
+}
+
+function AuthPinScreen({ title, value, setValue, error, onSubmit }) {
+  const push = (d) => value.length < 4 && setValue(value + d);
+  const del = () => setValue(value.slice(0, -1));
+  useEffect(() => {
+    if (value.length === 4) onSubmit();
+    // eslint-disable-next-line
+  }, [value]);
+  return (
+    <div className="px-5 pt-8 text-center">
+      <Lock className="mx-auto mb-2" style={{ color: INK }} size={26} />
+      <p style={{ color: INK }} className="font-semibold mb-1">{title}</p>
+      <PinDots value={value} />
+      {error && <p style={{ color: RED }} className="text-sm mb-2">{error}</p>}
+      <NumPad onDigit={push} onDelete={del} />
+    </div>
+  );
+}
+
+function SetPinScreen({ pinInput, setPinInput, pinConfirm, setPinConfirm, error, onSubmit }) {
+  const stage = pinInput.length < 4 ? "first" : "confirm";
+  const push = (d) => {
+    if (stage === "first" && pinInput.length < 4) setPinInput(pinInput + d);
+    else if (stage === "confirm" && pinConfirm.length < 4) setPinConfirm(pinConfirm + d);
+  };
+  const del = () => {
+    if (stage === "confirm" && pinConfirm.length > 0) setPinConfirm(pinConfirm.slice(0, -1));
+    else setPinInput(pinInput.slice(0, -1));
+  };
+  return (
+    <div className="px-5 pt-8 text-center">
+      <ShieldCheck className="mx-auto mb-2" style={{ color: INK }} size={26} />
+      <p style={{ color: INK }} className="font-semibold mb-1">
+        {stage === "first" ? "নতুন ৪ সংখ্যার পিন দিন" : "পিন আবার লিখুন"}
+      </p>
+      <p style={{ color: MUTED }} className="text-xs mb-1">এই পিন দিয়ে আপনি মালিক হিসেবে ঢুকবেন</p>
+      <PinDots value={stage === "first" ? pinInput : pinConfirm} />
+      {error && <p style={{ color: RED }} className="text-sm mb-2">{error}</p>}
+      <NumPad onDigit={push} onDelete={del} />
+      {stage === "confirm" && pinConfirm.length === 4 && (
+        <button
+          onClick={onSubmit}
+          style={{ backgroundColor: INK }}
+          className="mt-5 text-white px-6 py-2.5 rounded-lg font-semibold"
+        >
+          নিশ্চিত করুন
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ================= Owner dashboard ================= */
+function OwnerDashboard({ productionWorkers, salaryWorkers, onOpen, showAddWorker, setShowAddWorker, onAddWorker }) {
+  const [tab, setTab] = useState("piece");
+  const list = tab === "piece" ? productionWorkers : salaryWorkers;
+  return (
+    <div className="px-4 pt-4">
+      <div style={{ backgroundColor: "#F1E8D2" }} className="flex rounded-xl p-1 mb-4">
+        <TabBtn active={tab === "piece"} onClick={() => setTab("piece")} icon={<Shirt size={16} />} label="প্রোডাকশন স্টাফ" />
+        <TabBtn active={tab === "salary"} onClick={() => setTab("salary")} icon={<Banknote size={16} />} label="বেতনের স্টাফ" />
+      </div>
+
+      {list.length === 0 && (
+        <p style={{ color: MUTED }} className="text-center text-sm py-8">
+          এখানে কোনো কর্মী নেই। নতুন কর্মী যোগ করুন।
+        </p>
+      )}
+
+      <div className="space-y-2.5">
+        {list.map((w) => (
+          <button
+            key={w.id}
+            onClick={() => onOpen(w)}
+            style={{ ...stitchBorder, backgroundColor: "#fff" }}
+            className="w-full flex items-center justify-between rounded-2xl px-4 py-3.5 text-left active:bg-[#F7F1E2]"
+          >
+            <div className="flex items-center gap-3">
+              <div style={{ backgroundColor: "#F1E8D2", color: INK }} className="rounded-full p-2.5">
+                {tab === "piece" ? <Shirt size={16} /> : <Banknote size={16} />}
+              </div>
+              <div>
+                <p style={{ color: INK }} className="font-semibold">{w.name}</p>
+                <p style={{ color: MUTED }} className="text-xs">
+                  {tab === "piece" ? `প্রতি পিস ৳${fmt(w.rate)}` : `মাসিক ৳${fmt(w.monthlySalary)}`}
+                  {w.phone ? ` · ${w.phone}` : ""}
+                </p>
+              </div>
+            </div>
+            <ChevronRight size={18} style={{ color: "#C9BFA0" }} />
+          </button>
+        ))}
+      </div>
+
+      <button
+        onClick={() => setShowAddWorker(true)}
+        style={{ backgroundColor: THREAD, color: INK }}
+        className="w-full flex items-center justify-center gap-2 mt-5 font-semibold rounded-2xl py-3 active:opacity-90"
+      >
+        <Plus size={18} /> নতুন কর্মী যোগ করুন
+      </button>
+
+      {showAddWorker && (
+        <AddWorkerModal defaultType={tab} onClose={() => setShowAddWorker(false)} onSave={onAddWorker} />
+      )}
+    </div>
+  );
+}
+
+function TabBtn({ active, onClick, icon, label }) {
+  return (
+    <button
+      onClick={onClick}
+      style={active ? { backgroundColor: INK, color: "#fff" } : { color: "#5B5745" }}
+      className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-medium"
+    >
+      {icon} {label}
+    </button>
+  );
+}
+
+/* ================= Staff list ================= */
+function StaffListScreen({ workers, onPick }) {
+  return (
+    <div className="px-4 pt-4">
+      <p style={{ color: MUTED }} className="text-sm mb-4 px-1">
+        তালিকা থেকে নিজের নাম বেছে নিন।
+      </p>
+      {workers.length === 0 && (
+        <p style={{ color: MUTED }} className="text-center text-sm py-8">
+          এখনো কোনো কর্মী যোগ করা হয়নি।
+        </p>
+      )}
+      <div className="space-y-2.5">
+        {workers.map((w) => (
+          <button
+            key={w.id}
+            onClick={() => onPick(w)}
+            style={{ ...stitchBorder, backgroundColor: "#fff" }}
+            className="w-full flex items-center justify-between rounded-2xl px-4 py-3.5 text-left active:bg-[#F7F1E2]"
+          >
+            <div className="flex items-center gap-3">
+              <div style={{ backgroundColor: "#F1E8D2", color: INK }} className="rounded-full p-2.5">
+                {w.type === "piece" ? <Shirt size={16} /> : <Banknote size={16} />}
+              </div>
+              <div>
+                <p style={{ color: INK }} className="font-semibold">{w.name}</p>
+                <p style={{ color: MUTED }} className="text-xs">
+                  {w.type === "piece" ? "প্রোডাকশন স্টাফ" : "বেতনের স্টাফ"}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {w.pin && <Lock size={14} style={{ color: "#C9BFA0" }} />}
+              <ChevronRight size={18} style={{ color: "#C9BFA0" }} />
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ================= Shared form pieces ================= */
+function ModalShell({ title, onClose, children }) {
+  return (
+    <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center">
+      <div onClick={onClose} className="absolute inset-0 bg-black/40" />
+      <div
+        style={{ backgroundColor: PAPER, borderTop: `3px solid ${THREAD}` }}
+        className="relative w-full max-w-md sm:rounded-2xl rounded-t-3xl px-5 pt-5 pb-6 max-h-[88vh] overflow-y-auto"
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h2 style={{ color: INK }} className="font-bold text-lg">{title}</h2>
+          <button onClick={onClose} style={{ color: MUTED }} className="p-1 active:opacity-60">
+            <X size={20} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function FieldLabel({ children }) {
+  return (
+    <p style={{ color: MUTED }} className="text-xs font-medium mt-3 mb-1">
+      {children}
+    </p>
+  );
+}
+
+function TextInput({ value, onChange, placeholder, type = "text" }) {
+  return (
+    <input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      type={type}
+      style={{ ...stitchBorder, color: INK }}
+      className="w-full rounded-xl px-3.5 py-2.5 bg-white text-sm outline-none focus:border-solid"
+    />
+  );
+}
+
+function NumberInput({ value, onChange, placeholder }) {
+  return (
+    <input
+      value={value}
+      onChange={(e) => {
+        const v = e.target.value;
+        if (v === "" || /^[0-9]*\.?[0-9]*$/.test(v)) onChange(v);
+      }}
+      inputMode="decimal"
+      placeholder={placeholder}
+      style={{ ...stitchBorder, color: INK, ...numStyle }}
+      className="w-full rounded-xl px-3.5 py-2.5 bg-white text-sm outline-none"
+    />
+  );
+}
+
+function PinFieldOptional({ value, onChange }) {
+  return (
+    <input
+      value={value}
+      onChange={(e) => {
+        const v = e.target.value.replace(/\D/g, "").slice(0, 4);
+        onChange(v);
+      }}
+      inputMode="numeric"
+      placeholder="৪ সংখ্যা (ঐচ্ছিক)"
+      style={{ ...stitchBorder, color: INK, ...numStyle }}
+      className="w-full rounded-xl px-3.5 py-2.5 bg-white text-sm outline-none tracking-[0.3em]"
+    />
+  );
+}
+
+function PrimaryButton({ children, onClick, disabled }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{ backgroundColor: disabled ? "#C9BFA0" : THREAD, color: INK }}
+      className="w-full font-semibold rounded-xl py-3 mt-5 active:opacity-90 disabled:cursor-not-allowed"
+    >
+      {children}
+    </button>
+  );
+}
+
+function TypeToggle({ type, setType }) {
+  return (
+    <div style={{ backgroundColor: "#F1E8D2" }} className="flex rounded-xl p-1 mt-1">
+      <button
+        onClick={() => setType("piece")}
+        style={type === "piece" ? { backgroundColor: INK, color: "#fff" } : { color: "#5B5745" }}
+        className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium"
+      >
+        <Shirt size={14} /> প্রোডাকশন (পিস রেট)
+      </button>
+      <button
+        onClick={() => setType("salary")}
+        style={type === "salary" ? { backgroundColor: INK, color: "#fff" } : { color: "#5B5745" }}
+        className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium"
+      >
+        <Banknote size={14} /> মাসিক বেতন
+      </button>
+    </div>
+  );
+}
+
+/* ================= Add / Edit worker ================= */
+function AddWorkerModal({ defaultType, onClose, onSave }) {
+  const [name, setName] = useState("");
+  const [type, setType] = useState(defaultType || "piece");
+  const [address, setAddress] = useState("");
+  const [phone, setPhone] = useState("");
+  const [rate, setRate] = useState("");
+  const [monthlySalary, setMonthlySalary] = useState("");
+  const [pin, setPin] = useState("");
+  const [err, setErr] = useState("");
+
+  function submit() {
+    if (!name.trim()) return setErr("নাম দিন");
+    if (pin && pin.length !== 4) return setErr("পিন হতে হবে ৪ সংখ্যার, অথবা খালি রাখুন");
+    onSave({
+      name: name.trim(),
+      type,
+      address: address.trim(),
+      phone: phone.trim(),
+      rate: type === "piece" ? Number(rate) || 0 : undefined,
+      monthlySalary: type === "salary" ? Number(monthlySalary) || 0 : undefined,
+      pin: pin || "",
+    });
+  }
+
+  return (
+    <ModalShell title="নতুন কর্মী" onClose={onClose}>
+      <FieldLabel>ধরন</FieldLabel>
+      <TypeToggle type={type} setType={setType} />
+
+      <FieldLabel>নাম</FieldLabel>
+      <TextInput value={name} onChange={setName} placeholder="যেমন: সালাম ভাই" />
+
+      <FieldLabel>ঠিকানা (ঐচ্ছিক)</FieldLabel>
+      <TextInput value={address} onChange={setAddress} placeholder="যেমন: মিরপুর-১০" />
+
+      <FieldLabel>মোবাইল নম্বর (ঐচ্ছিক)</FieldLabel>
+      <TextInput value={phone} onChange={setPhone} placeholder="০১৭xxxxxxxx" type="tel" />
+
+      {type === "piece" ? (
+        <>
+          <FieldLabel>প্রতি পিস রেট (৳)</FieldLabel>
+          <NumberInput value={rate} onChange={setRate} placeholder="যেমন: ৩৫" />
+        </>
+      ) : (
+        <>
+          <FieldLabel>মাসিক বেতন (৳)</FieldLabel>
+          <NumberInput value={monthlySalary} onChange={setMonthlySalary} placeholder="যেমন: ১৫০০০" />
+        </>
+      )}
+
+      <FieldLabel>স্টাফ লগইন পিন (ঐচ্ছিক)</FieldLabel>
+      <PinFieldOptional value={pin} onChange={setPin} />
+      <p style={{ color: MUTED }} className="text-[11px] mt-1">
+        পিন দিলে স্টাফ নিজে ঢুকে হিসাব দেখতে এটা ব্যবহার করবে। খালি রাখলে পিন ছাড়াই দেখা যাবে।
+      </p>
+
+      {err && <p style={{ color: RED }} className="text-sm mt-2">{err}</p>}
+      <PrimaryButton onClick={submit}>যোগ করুন</PrimaryButton>
+    </ModalShell>
+  );
+}
+
+function EditWorkerModal({ worker, onClose, onSave, onAskDelete }) {
+  const [name, setName] = useState(worker.name || "");
+  const [address, setAddress] = useState(worker.address || "");
+  const [phone, setPhone] = useState(worker.phone || "");
+  const [rate, setRate] = useState(worker.rate != null ? String(worker.rate) : "");
+  const [monthlySalary, setMonthlySalary] = useState(worker.monthlySalary != null ? String(worker.monthlySalary) : "");
+  const [pin, setPin] = useState(worker.pin || "");
+  const [err, setErr] = useState("");
+
+  function submit() {
+    if (!name.trim()) return setErr("নাম দিন");
+    if (pin && pin.length !== 4) return setErr("পিন হতে হবে ৪ সংখ্যার, অথবা খালি রাখুন");
+    onSave({
+      name: name.trim(),
+      address: address.trim(),
+      phone: phone.trim(),
+      rate: worker.type === "piece" ? Number(rate) || 0 : undefined,
+      monthlySalary: worker.type === "salary" ? Number(monthlySalary) || 0 : undefined,
+      pin: pin || "",
+    });
+  }
+
+  return (
+    <ModalShell title="কর্মীর তথ্য সম্পাদনা" onClose={onClose}>
+      <FieldLabel>নাম</FieldLabel>
+      <TextInput value={name} onChange={setName} placeholder="নাম" />
+
+      <FieldLabel>ঠিকানা</FieldLabel>
+      <TextInput value={address} onChange={setAddress} placeholder="ঠিকানা" />
+
+      <FieldLabel>মোবাইল নম্বর</FieldLabel>
+      <TextInput value={phone} onChange={setPhone} placeholder="মোবাইল নম্বর" type="tel" />
+
+      {worker.type === "piece" ? (
+        <>
+          <FieldLabel>প্রতি পিস রেট (৳)</FieldLabel>
+          <NumberInput value={rate} onChange={setRate} placeholder="রেট" />
+        </>
+      ) : (
+        <>
+          <FieldLabel>মাসিক বেতন (৳)</FieldLabel>
+          <NumberInput value={monthlySalary} onChange={setMonthlySalary} placeholder="মাসিক বেতন" />
+        </>
+      )}
+
+      <FieldLabel>স্টাফ লগইন পিন</FieldLabel>
+      <PinFieldOptional value={pin} onChange={setPin} />
+
+      {err && <p style={{ color: RED }} className="text-sm mt-2">{err}</p>}
+      <PrimaryButton onClick={submit}>পরিবর্তন সংরক্ষণ করুন</PrimaryButton>
+
+      <button
+        onClick={onAskDelete}
+        style={{ color: RED }}
+        className="w-full flex items-center justify-center gap-1.5 text-sm font-medium mt-4 py-2 active:opacity-70"
+      >
+        <Trash2 size={15} /> এই কর্মী মুছে ফেলুন
+      </button>
+    </ModalShell>
+  );
+}
+
+function ConfirmDeleteModal({ name, onCancel, onConfirm }) {
+  return (
+    <ModalShell title="মুছে ফেলবেন?" onClose={onCancel}>
+      <p style={{ color: INK }} className="text-sm">
+        "{name}" এবং তার সব হিসাবের এন্ট্রি স্থায়ীভাবে মুছে যাবে। এটা আর ফিরিয়ে আনা যাবে না।
+      </p>
+      <div className="flex gap-3 mt-5">
+        <button
+          onClick={onCancel}
+          style={{ ...stitchBorder, color: INK }}
+          className="flex-1 rounded-xl py-2.5 font-medium bg-white"
+        >
+          বাতিল
+        </button>
+        <button
+          onClick={onConfirm}
+          style={{ backgroundColor: RED, color: "#fff" }}
+          className="flex-1 rounded-xl py-2.5 font-semibold"
+        >
+          মুছে ফেলুন
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= Worker header card ================= */
+function WorkerHeaderCard({ worker, role, onEdit }) {
+  return (
+    <div style={{ backgroundColor: INK }} className="mx-4 mt-4 rounded-2xl px-5 py-4 text-[#FAF6EF]">
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="font-bold text-lg leading-tight">{worker.name}</p>
+          <p style={{ color: THREAD }} className="text-xs mt-0.5">
+            {worker.type === "piece" ? `প্রতি পিস ৳${fmt(worker.rate)}` : `মাসিক বেতন ৳${fmt(worker.monthlySalary)}`}
+          </p>
+        </div>
+        {role === "owner" && (
+          <button onClick={onEdit} style={{ backgroundColor: THREAD, color: INK }} className="rounded-full p-2 active:opacity-90">
+            <Pencil size={15} />
+          </button>
+        )}
+      </div>
+      {(worker.address || worker.phone) && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs opacity-80">
+          {worker.address && (
+            <span className="flex items-center gap-1"><MapPin size={12} /> {worker.address}</span>
+          )}
+          {worker.phone && (
+            <span className="flex items-center gap-1"><Phone size={12} /> {worker.phone}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SummaryCard({ label, value, accent, big }) {
+  return (
+    <div style={{ ...stitchBorder, backgroundColor: "#fff" }} className="rounded-xl px-3.5 py-3">
+      <p style={{ color: MUTED }} className="text-[11px] mb-1">{label}</p>
+      <p style={{ color: accent || INK, ...numStyle }} className={big ? "text-xl font-bold" : "text-base font-semibold"}>
+        ৳{fmt(value)}
+      </p>
+    </div>
+  );
+}
+
+function EntryRow({ entry, isWork, onDelete, canDelete }) {
+  const positive = isWork ? entry.amount >= 0 : true;
+  return (
+    <div style={{ ...stitchBorder, backgroundColor: "#fff" }} className="flex items-center justify-between rounded-xl px-3.5 py-3">
+      <div className="flex items-center gap-3">
+        <div
+          style={{
+            backgroundColor: entry.kind === "work" ? "#EAF3EC" : entry.kind === "advance" ? "#FBEDE3" : "#F1E8D2",
+            color: entry.kind === "work" ? GREEN : entry.kind === "advance" ? THREAD : INK,
+          }}
+          className="rounded-full p-2"
+        >
+          {entry.kind === "work" ? <Shirt size={14} /> : <Wallet size={14} />}
+        </div>
+        <div>
+          <p style={{ color: INK }} className="text-sm font-semibold">
+            {entry.kind === "work" ? "কাজ জমা" : entry.kind === "advance" ? "অগ্রিম" : "পেমেন্ট"}
+          </p>
+          <p style={{ color: MUTED }} className="text-[11px] flex items-center gap-1">
+            <CalendarDays size={11} /> {shortDate(entry.date)}
+            {entry.kind === "work" && entry.quantity != null && (
+              <span className="flex items-center gap-0.5">
+                {" "}· <Hash size={10} /> {fmt(entry.quantity)} × ৳{fmt(entry.rate)}
+              </span>
+            )}
+            {entry.note ? ` · ${entry.note}` : ""}
+          </p>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <p style={{ color: entry.kind === "work" ? GREEN : RED, ...numStyle }} className="text-sm font-bold whitespace-nowrap">
+          {entry.kind === "work" ? "+" : "−"}৳{fmt(entry.amount)}
+        </p>
+        {canDelete && (
+          <button onClick={() => onDelete(entry.id)} style={{ color: "#C9BFA0" }} className="p-1 active:opacity-60">
+            <Trash2 size={14} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ================= Production (piece) worker detail ================= */
+function AddProductionEntryModal({ worker, kind, setKind, onClose, onSave }) {
+  const [date, setDate] = useState(todayStr());
+  const [quantity, setQuantity] = useState("");
+  const [rate, setRate] = useState(String(worker.rate || ""));
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState("");
+
+  function submit() {
+    if (kind === "work") {
+      const q = Number(quantity);
+      const r = Number(rate);
+      if (!q || q <= 0) return setErr("সংখ্যা দিন");
+      if (!r || r <= 0) return setErr("রেট দিন");
+      onSave({ date, kind: "work", quantity: q, rate: r, amount: q * r, note: note.trim() });
+    } else {
+      const a = Number(amount);
+      if (!a || a <= 0) return setErr("টাকার পরিমাণ দিন");
+      onSave({ date, kind: "payment", amount: a, note: note.trim() });
+    }
+  }
+
+  return (
+    <ModalShell title="নতুন এন্ট্রি" onClose={onClose}>
+      <div style={{ backgroundColor: "#F1E8D2" }} className="flex rounded-xl p-1">
+        <button
+          onClick={() => setKind("work")}
+          style={kind === "work" ? { backgroundColor: INK, color: "#fff" } : { color: "#5B5745" }}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium"
+        >
+          <Shirt size={14} /> কাজ জমা
+        </button>
+        <button
+          onClick={() => setKind("payment")}
+          style={kind === "payment" ? { backgroundColor: INK, color: "#fff" } : { color: "#5B5745" }}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium"
+        >
+          <Wallet size={14} /> পেমেন্ট
+        </button>
+      </div>
+
+      <FieldLabel>তারিখ</FieldLabel>
+      <TextInput value={date} onChange={setDate} type="date" />
+
+      {kind === "work" ? (
+        <>
+          <FieldLabel>কত পিস</FieldLabel>
+          <NumberInput value={quantity} onChange={setQuantity} placeholder="যেমন: ৫০" />
+          <FieldLabel>প্রতি পিস রেট (৳)</FieldLabel>
+          <NumberInput value={rate} onChange={setRate} placeholder="রেট" />
+          {quantity && rate && (
+            <p style={{ color: GREEN }} className="text-sm font-semibold mt-2">
+              মোট: ৳{fmt(Number(quantity) * Number(rate))}
+            </p>
+          )}
+        </>
+      ) : (
+        <>
+          <FieldLabel>টাকার পরিমাণ (৳)</FieldLabel>
+          <NumberInput value={amount} onChange={setAmount} placeholder="যেমন: ১০০০" />
+        </>
+      )}
+
+      <FieldLabel>নোট (ঐচ্ছিক)</FieldLabel>
+      <TextInput value={note} onChange={setNote} placeholder="যেমন: শার্ট সেলাই" />
+
+      {err && <p style={{ color: RED }} className="text-sm mt-2">{err}</p>}
+      <PrimaryButton onClick={submit}>এন্ট্রি যোগ করুন</PrimaryButton>
+    </ModalShell>
+  );
+}
+
+function ProductionWorkerDetail({
+  worker, role, entries, loading,
+  showAddEntry, setShowAddEntry, addEntryKind, setAddEntryKind,
+  showEditWorker, setShowEditWorker, confirmDeleteWorker, setConfirmDeleteWorker,
+  onAddEntry, onDeleteEntry, onUpdateWorker, onDeleteWorker,
+}) {
+  const totalProduced = entries.filter((e) => e.kind === "work").reduce((s, e) => s + (e.quantity || 0), 0);
+  const totalEarned = entries.filter((e) => e.kind === "work").reduce((s, e) => s + (e.amount || 0), 0);
+  const totalPaid = entries.filter((e) => e.kind === "payment").reduce((s, e) => s + (e.amount || 0), 0);
+  const due = totalEarned - totalPaid;
+
+  return (
+    <div>
+      <WorkerHeaderCard worker={worker} role={role} onEdit={() => setShowEditWorker(true)} />
+
+      <div className="grid grid-cols-2 gap-2.5 px-4 mt-4">
+        <SummaryCard label="মোট জমা" value={totalProduced} accent={INK} />
+        <SummaryCard label="মোট আয়" value={totalEarned} accent={GREEN} />
+        <SummaryCard label="মোট পেমেন্ট" value={totalPaid} accent={THREAD} />
+        <SummaryCard label={due >= 0 ? "বকেয়া আছে" : "বেশি দেওয়া হয়েছে"} value={Math.abs(due)} accent={due >= 0 ? RED : GREEN} big />
+      </div>
+
+      {role === "owner" && (
+        <button
+          onClick={() => setShowAddEntry(true)}
+          style={{ backgroundColor: THREAD, color: INK }}
+          className="w-full flex items-center justify-center gap-2 mx-auto mt-4 font-semibold rounded-2xl py-3 active:opacity-90"
+        >
+          <Plus size={18} /> নতুন এন্ট্রি
+        </button>
+      )}
+
+      <div className="px-4 mt-5">
+        <p style={{ color: MUTED }} className="text-xs font-medium mb-2">সব এন্ট্রি</p>
+        {loading && <p style={{ color: MUTED }} className="text-sm text-center py-6">লোড হচ্ছে…</p>}
+        {!loading && entries.length === 0 && (
+          <p style={{ color: MUTED }} className="text-sm text-center py-8">এখনো কোনো এন্ট্রি নেই।</p>
+        )}
+        <div className="space-y-2">
+          {entries.map((e) => (
+            <EntryRow key={e.id} entry={e} isWork={e.kind === "work"} onDelete={onDeleteEntry} canDelete={role === "owner"} />
+          ))}
+        </div>
+      </div>
+
+      {showAddEntry && (
+        <AddProductionEntryModal
+          worker={worker}
+          kind={addEntryKind}
+          setKind={setAddEntryKind}
+          onClose={() => setShowAddEntry(false)}
+          onSave={onAddEntry}
+        />
+      )}
+
+      {showEditWorker && (
+        <EditWorkerModal
+          worker={worker}
+          onClose={() => setShowEditWorker(false)}
+          onSave={onUpdateWorker}
+          onAskDelete={() => { setShowEditWorker(false); setConfirmDeleteWorker(true); }}
+        />
+      )}
+
+      {confirmDeleteWorker && (
+        <ConfirmDeleteModal
+          name={worker.name}
+          onCancel={() => setConfirmDeleteWorker(false)}
+          onConfirm={onDeleteWorker}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ================= Salary worker detail ================= */
+function AddSalaryEntryModal({ worker, defaultMonth, onClose, onSave }) {
+  const [kind, setKind] = useState("payment");
+  const [date, setDate] = useState(() => {
+    const t = todayStr();
+    return t.slice(0, 7) === defaultMonth ? t : `${defaultMonth}-01`;
+  });
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState("");
+
+  function submit() {
+    const a = Number(amount);
+    if (!a || a <= 0) return setErr("টাকার পরিমাণ দিন");
+    onSave({ date, kind, amount: a, note: note.trim() });
+  }
+
+  return (
+    <ModalShell title="নতুন এন্ট্রি" onClose={onClose}>
+      <div style={{ backgroundColor: "#F1E8D2" }} className="flex rounded-xl p-1">
+        <button
+          onClick={() => setKind("payment")}
+          style={kind === "payment" ? { backgroundColor: INK, color: "#fff" } : { color: "#5B5745" }}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium"
+        >
+          <Banknote size={14} /> বেতন প্রদান
+        </button>
+        <button
+          onClick={() => setKind("advance")}
+          style={kind === "advance" ? { backgroundColor: INK, color: "#fff" } : { color: "#5B5745" }}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium"
+        >
+          <Wallet size={14} /> অগ্রিম
+        </button>
+      </div>
+
+      <FieldLabel>তারিখ</FieldLabel>
+      <TextInput value={date} onChange={setDate} type="date" />
+
+      <FieldLabel>টাকার পরিমাণ (৳)</FieldLabel>
+      <NumberInput value={amount} onChange={setAmount} placeholder="যেমন: ৫০০০" />
+
+      <FieldLabel>নোট (ঐচ্ছিক)</FieldLabel>
+      <TextInput value={note} onChange={setNote} placeholder="যেমন: ঈদ অগ্রিম" />
+
+      {err && <p style={{ color: RED }} className="text-sm mt-2">{err}</p>}
+      <PrimaryButton onClick={submit}>এন্ট্রি যোগ করুন</PrimaryButton>
+    </ModalShell>
+  );
+}
+
+function SalaryWorkerDetail({
+  worker, role, entries, loading, selectedMonth, setSelectedMonth,
+  showAddEntry, setShowAddEntry, showEditWorker, setShowEditWorker,
+  confirmDeleteWorker, setConfirmDeleteWorker,
+  onAddEntry, onDeleteEntry, onUpdateWorker, onDeleteWorker,
+}) {
+  const monthEntries = entries.filter((e) => (e.date || "").slice(0, 7) === selectedMonth);
+  const paidThisMonth = monthEntries.reduce((s, e) => s + (e.amount || 0), 0);
+  const due = (worker.monthlySalary || 0) - paidThisMonth;
+
+  return (
+    <div>
+      <WorkerHeaderCard worker={worker} role={role} onEdit={() => setShowEditWorker(true)} />
+
+      <div style={{ ...stitchBorder, backgroundColor: "#fff" }} className="flex items-center justify-between mx-4 mt-4 rounded-xl px-3 py-2.5">
+        <button onClick={() => setSelectedMonth(shiftMonth(selectedMonth, -1))} style={{ color: INK }} className="p-1 active:opacity-60">
+          <ChevronLeft size={18} />
+        </button>
+        <p style={{ color: INK }} className="font-semibold text-sm">{monthLabel(selectedMonth)}</p>
+        <button onClick={() => setSelectedMonth(shiftMonth(selectedMonth, 1))} style={{ color: INK }} className="p-1 active:opacity-60">
+          <ChevronRight size={18} />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2.5 px-4 mt-3">
+        <SummaryCard label="মাসিক বেতন" value={worker.monthlySalary || 0} accent={INK} />
+        <SummaryCard label="এই মাসে দেওয়া" value={paidThisMonth} accent={THREAD} />
+        <SummaryCard label={due >= 0 ? "বকেয়া আছে" : "বেশি দেওয়া হয়েছে"} value={Math.abs(due)} accent={due >= 0 ? RED : GREEN} big />
+      </div>
+
+      {role === "owner" && (
+        <button
+          onClick={() => setShowAddEntry(true)}
+          style={{ backgroundColor: THREAD, color: INK }}
+          className="w-full flex items-center justify-center gap-2 mx-auto mt-4 font-semibold rounded-2xl py-3 active:opacity-90"
+        >
+          <Plus size={18} /> নতুন এন্ট্রি
+        </button>
+      )}
+
+      <div className="px-4 mt-5">
+        <p style={{ color: MUTED }} className="text-xs font-medium mb-2">{monthLabel(selectedMonth)}-এর এন্ট্রি</p>
+        {loading && <p style={{ color: MUTED }} className="text-sm text-center py-6">লোড হচ্ছে…</p>}
+        {!loading && monthEntries.length === 0 && (
+          <p style={{ color: MUTED }} className="text-sm text-center py-8">এই মাসে কোনো এন্ট্রি নেই।</p>
+        )}
+        <div className="space-y-2">
+          {monthEntries.map((e) => (
+            <EntryRow key={e.id} entry={e} isWork={false} onDelete={onDeleteEntry} canDelete={role === "owner"} />
+          ))}
+        </div>
+      </div>
+
+      {showAddEntry && (
+        <AddSalaryEntryModal
+          worker={worker}
+          defaultMonth={selectedMonth}
+          onClose={() => setShowAddEntry(false)}
+          onSave={onAddEntry}
+        />
+      )}
+
+      {showEditWorker && (
+        <EditWorkerModal
+          worker={worker}
+          onClose={() => setShowEditWorker(false)}
+          onSave={onUpdateWorker}
+          onAskDelete={() => { setShowEditWorker(false); setConfirmDeleteWorker(true); }}
+        />
+      )}
+
+      {confirmDeleteWorker && (
+        <ConfirmDeleteModal
+          name={worker.name}
+          onCancel={() => setConfirmDeleteWorker(false)}
+          onConfirm={onDeleteWorker}
+        />
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+</body>
+</html>

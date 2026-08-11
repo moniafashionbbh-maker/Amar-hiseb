@@ -1,0 +1,9 @@
+{
+  "name": "আমার হিসাব",
+  "short_name": "আমার হিসাব",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#FAF6EF",
+  "theme_color": "#26323A",
+  "icons": []
+}
